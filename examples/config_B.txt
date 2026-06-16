@@ -1,0 +1,10 @@
+# apelido da máquina
+B
+# tempo do token e dos dados (s) - atraso por salto
+1
+# probabilidade de inserir erro nas mensagens (0..100 %)
+20
+# timeout do token (s)
+10
+# tempo mínimo entre tokens (s)
+1
