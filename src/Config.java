@@ -1,6 +1,8 @@
 import java.io.BufferedReader;
-import java.io.FileReader;
+import java.io.FileInputStream;
 import java.io.IOException;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -36,7 +38,8 @@ public class Config {
     /** Carrega a configuração a partir de um arquivo texto. */
     public static Config load(String path) throws IOException {
         List<String> lines = new ArrayList<>();
-        try (BufferedReader r = new BufferedReader(new FileReader(path))) {
+        try (BufferedReader r = new BufferedReader(
+                new InputStreamReader(new FileInputStream(path), StandardCharsets.UTF_8))) {
             String ln;
             while ((ln = r.readLine()) != null) {
                 String t = ln.trim();

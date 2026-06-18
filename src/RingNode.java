@@ -16,8 +16,12 @@ import java.util.Random;
  *   - receiver : bloqueia em socket.receive() e trata cada pacote recebido.
  *   - monitor  : controla o token (timeout / token perdido) e recupera dados
  *                presos. Apenas a máquina mestre regenera o token perdido.
- *   - bootstrap: após a descoberta estabilizar, faz a máquina inicial gerar
- *                o primeiro token.
+ *   - bootstrap: tenta gerar o primeiro token periodicamente (mecanismo de
+ *                reserva). Na prática a geração é disparada de forma reativa,
+ *                assim que a máquina mestre descobre a segunda máquina do
+ *                anel (ver tryStartFirstToken), o que evita o caso degenerado
+ *                de um anel com 1 só máquina enviar o token "para si mesma" e
+ *                disparar uma falsa detecção de token duplicado.
  *   - menu     : (em Main) lê o teclado e interage com este nó.
  *
  * Todo o processamento de pacotes acontece na thread receiver, o que serializa
@@ -135,6 +139,7 @@ public class RingNode {
         if (changed) {
             log("DISCOVER de '" + nick + "' (" + src.getHostAddress() + ":" + srcPort
                     + "). Nova topologia: " + peers.diagram());
+            tryStartFirstToken("nova máquina descoberta: '" + nick + "'");
         }
         sendHello(); // responde se identificando (em broadcast)
     }
@@ -148,6 +153,7 @@ public class RingNode {
         if (changed) {
             log("HELLO de '" + nick + "' (" + src.getHostAddress() + ":" + srcPort
                     + "). Nova topologia: " + peers.diagram());
+            tryStartFirstToken("nova máquina descoberta: '" + nick + "'");
         }
     }
 
@@ -157,7 +163,11 @@ public class RingNode {
         lastRingActivity = System.currentTimeMillis();
 
         // Controle do token feito pela máquina mestre: detecta DOIS tokens.
-        if (peers.isMaster()) {
+        // Só faz sentido com pelo menos 2 máquinas no anel; com 1 só máquina
+        // (ainda sozinha), não há "duplicidade" real a detectar aqui (esse
+        // caso degenerado é evitado em forwardToken(), que não envia o token
+        // para si mesma).
+        if (peers.isMaster() && peers.size() > 1) {
             long now = System.currentTimeMillis();
             long minMs = (long) (cfg.minTokenInterval * 1000);
             if (lastTokenAtMaster > 0 && (now - lastTokenAtMaster) < minMs) {
@@ -202,21 +212,56 @@ public class RingNode {
             log("Sem sucessor; token retido.");
             return;
         }
+        if (s.nickname.equals(selfNick)) {
+            // Anel com 1 só máquina (ainda sozinha): enviar o token "para si
+            // mesma" faria o pacote voltar quase instantaneamente e seria
+            // erroneamente interpretado como "token duplicado" (ver onToken).
+            // Em vez disso, aguardamos: tryStartFirstToken() é chamado de novo
+            // tão logo outra máquina seja descoberta (ou periodicamente pelo
+            // bootstrap), retomando a circulação normalmente.
+            firstTokenDone = false;
+            log("[TOKEN] sozinho no anel; aguardando outra máquina entrar para iniciar a circulação.");
+            return;
+        }
         log("[TOKEN] repassado para '" + s.nickname + "'.");
         sendTo(s, Packet.token());
     }
 
-    /** Opção de menu: gerar/inserir um token na rede (qualquer máquina). */
-    public void insertToken() {
-        lastRingActivity = System.currentTimeMillis();
-        firstTokenDone = true;
-        Peer s = peers.successor();
-        if (s == null) {
-            log("Sem sucessor; não foi possível inserir token.");
+    /**
+     * Gera o primeiro token do anel, caso este nó seja a máquina mestre
+     * (primeira em ordem alfabética) e ainda não exista token na rede.
+     *
+     * Só efetivamente inicia a circulação quando há pelo menos outra máquina
+     * conhecida (caso contrário, fica esperando). É chamado de forma reativa
+     * a cada nova máquina descoberta (onDiscover/onHello) e, como reserva,
+     * periodicamente pela thread de bootstrap — útil caso o HELLO/DISCOVER
+     * que dispararia a chamada reativa se perca (UDP não garante entrega).
+     *
+     * 'synchronized' evita que a thread de bootstrap e a thread receiver
+     * gerem o primeiro token simultaneamente (condição de corrida que
+     * produziria dois tokens reais na rede).
+     */
+    private synchronized void tryStartFirstToken(String motivo) {
+        if (firstTokenDone) return;
+        if (!peers.isMaster()) {
+            firstTokenDone = true; // outra máquina (a mestre) vai gerar o token
             return;
         }
-        log("[TOKEN] inserido na rede pelo usuário; enviado para '" + s.nickname + "'.");
-        sendTo(s, Packet.token());
+        if (peers.size() <= 1) return; // ainda sozinho no anel; aguarda
+        firstTokenDone = true;
+        lastRingActivity = System.currentTimeMillis();
+        lastTokenAtMaster = System.currentTimeMillis();
+        log("[MONITOR] sou a máquina inicial do anel ('" + selfNick + "'). Gerando o primeiro token (" + motivo + ").");
+        forwardToken();
+    }
+
+    /** Opção de menu: gerar/inserir um token na rede (qualquer máquina). */
+    public void insertToken() {
+        log("[TOKEN] inserção solicitada pelo usuário.");
+        firstTokenDone = true;
+        lastRingActivity = System.currentTimeMillis();
+        lastTokenAtMaster = System.currentTimeMillis();
+        forwardToken();
     }
 
     /** Opção de menu: retirar o token da rede (o próximo a chegar é removido). */
@@ -387,17 +432,18 @@ public class RingNode {
         }
     }
 
-    /** Após a descoberta estabilizar, a máquina inicial gera o primeiro token. */
+    /**
+     * Mecanismo de reserva: tenta gerar o primeiro token periodicamente até
+     * conseguir (mestre + ao menos 2 máquinas no anel) ou até outra máquina
+     * assumir esse papel. Normalmente a geração já acontece antes disso, de
+     * forma reativa, em tryStartFirstToken() chamado a partir de
+     * onDiscover/onHello.
+     */
     private void bootstrapToken() {
-        sleepMillis(3000);
-        if (!firstTokenDone && peers.isMaster()) {
-            firstTokenDone = true;
-            lastRingActivity = System.currentTimeMillis();
-            lastTokenAtMaster = System.currentTimeMillis();
-            log("[MONITOR] sou a máquina inicial do anel ('" + selfNick + "'). Gerando o primeiro token.");
-            forwardToken();
-        } else {
-            firstTokenDone = true; // já há (ou haverá) token gerado por outra máquina
+        sleepMillis(1000);
+        while (running && !firstTokenDone) {
+            tryStartFirstToken("verificação periódica de inicialização");
+            sleepMillis(1000);
         }
     }
 
