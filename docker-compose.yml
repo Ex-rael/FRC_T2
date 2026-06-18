@@ -1,0 +1,61 @@
+# Anel com 4 "máquinas" (A, B, C, D), cada uma em seu próprio contêiner.
+#
+# Todos os contêineres ficam na mesma rede bridge (subnet 172.28.0.0/16). Como
+# cada um tem seu próprio namespace de rede, todos escutam na porta UDP 6000 e
+# se descobrem por broadcast — reproduzindo o cenário de 4 PCs na mesma LAN.
+#
+# O 3º argumento (172.28.255.255:6000) é o endereço de broadcast DIRECIONADO da
+# subnet, mais robusto que o 255.255.255.255 padrão em ambientes Docker.
+#
+# Uso rápido:
+#   docker compose up --build         # sobe as 4, mostra os logs do anel
+#   docker compose down               # encerra tudo
+#
+# Para usar o MENU de uma máquina (enviar mensagem, inserir/retirar token):
+#   docker attach frc_t2-machine-a-1  # (Ctrl-P Ctrl-Q para sair sem matar)
+# ou suba 3 em background e rode a 4ª interativa:
+#   docker compose up -d --build machine-b machine-c machine-d
+#   docker compose run --rm machine-a
+
+# Config comum a todas as máquinas (mesma imagem, mesma rede, stdin para o menu).
+x-machine: &machine
+  build: .
+  image: frc-t2-ring
+  stdin_open: true   # mantém o stdin aberto (menu interativo)
+  tty: true
+
+services:
+  machine-a:
+    <<: *machine
+    command: ["examples/config_A.txt", "6000", "172.28.255.255:6000"]
+    networks:
+      ring:
+        ipv4_address: 172.28.0.10
+
+  machine-b:
+    <<: *machine
+    command: ["examples/config_B.txt", "6000", "172.28.255.255:6000"]
+    networks:
+      ring:
+        ipv4_address: 172.28.0.11
+
+  machine-c:
+    <<: *machine
+    command: ["examples/config_C.txt", "6000", "172.28.255.255:6000"]
+    networks:
+      ring:
+        ipv4_address: 172.28.0.12
+
+  machine-d:
+    <<: *machine
+    command: ["examples/config_D.txt", "6000", "172.28.255.255:6000"]
+    networks:
+      ring:
+        ipv4_address: 172.28.0.13
+
+networks:
+  ring:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16

@@ -1,0 +1,8 @@
+out/
+**/*.class
+.git/
+.claude/
+references/
+*.md
+LICENSE
+Makefile
