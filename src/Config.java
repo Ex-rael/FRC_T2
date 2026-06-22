@@ -20,29 +20,19 @@ import java.util.List;
  * branco e linhas iniciadas por '#' (comentários) são ignoradas.
  */
 public class Config {
-    public final String nickname;           // apelido da máquina
-    public final double tokenTime;          // tempo do token e dos dados (s)
-    public final int errorProbability;      // probabilidade de erro (0..100 %)
-    public final double tokenTimeout;       // timeout do token (s)
-    public final double minTokenInterval;   // tempo mínimo entre tokens (s)
-    public final double claimBackoffMin;    // tempo mínimo de backoff CLAIM (s)
-    public final double claimBackoffMax;    // tempo máximo de backoff CLAIM (s)
-    public final double peerStaleMultiplier; // quanto multiplicar tokenTimeout para stale peer
-    public final double discoverInterval;   // intervalo entre DISCOVER periódicos (s)
+    public final String nickname;        // apelido da máquina
+    public final double tokenTime;       // tempo do token e dos dados (s)
+    public final int errorProbability;   // probabilidade de erro (0..100 %)
+    public final double tokenTimeout;    // timeout do token (s)
+    public final double minTokenInterval; // tempo mínimo entre tokens (s)
 
     public Config(String nickname, double tokenTime, int errorProbability,
-                  double tokenTimeout, double minTokenInterval,
-                  double claimBackoffMin, double claimBackoffMax,
-                  double peerStaleMultiplier, double discoverInterval) {
+                  double tokenTimeout, double minTokenInterval) {
         this.nickname = nickname;
         this.tokenTime = tokenTime;
         this.errorProbability = errorProbability;
         this.tokenTimeout = tokenTimeout;
         this.minTokenInterval = minTokenInterval;
-        this.claimBackoffMin = claimBackoffMin;
-        this.claimBackoffMax = claimBackoffMax;
-        this.peerStaleMultiplier = peerStaleMultiplier;
-        this.discoverInterval = discoverInterval;
     }
 
     /** Carrega a configuração a partir de um arquivo texto. */
@@ -66,16 +56,7 @@ public class Config {
         int prob = (int) Math.round(num(lines.get(2)));
         double tout = num(lines.get(3));
         double minI = num(lines.get(4));
-        double claimMin = 0.2;
-        double claimMax = 1.0;
-        double staleMult = 3.0;
-        double discoverInt = 1.0;
-        if (lines.size() >= 6) claimMin = num(lines.get(5));
-        if (lines.size() >= 7) claimMax = num(lines.get(6));
-        if (lines.size() >= 8) staleMult = num(lines.get(7));
-        if (lines.size() >= 9) discoverInt = num(lines.get(8));
-        return new Config(nick, tTime, prob, tout, minI,
-                claimMin, claimMax, staleMult, discoverInt);
+        return new Config(nick, tTime, prob, tout, minI);
     }
 
     /** Converte "2,5" ou "20%" em número, tolerando separadores. */
@@ -86,8 +67,6 @@ public class Config {
     @Override
     public String toString() {
         return "apelido=" + nickname + " tempo=" + tokenTime + "s prob.erro=" + errorProbability
-                + "% timeout=" + tokenTimeout + "s tmin=" + minTokenInterval
-                + "s claimMin=" + claimBackoffMin + "s claimMax=" + claimBackoffMax
-                + "s staleMult=" + peerStaleMultiplier + " discoverInt=" + discoverInterval + "s";
+                + "% timeout=" + tokenTimeout + "s tmin=" + minTokenInterval + "s";
     }
 }

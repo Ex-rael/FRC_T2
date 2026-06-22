@@ -41,9 +41,9 @@ public class Main {
     }
 
     private static void printUsage() {
-        Console.println("Uso: java Main <arquivo_config> [porta_local=6000] [alvos_descoberta]");
-        Console.println("  LAN (3 PCs):  java Main config.txt");
-        Console.println("  localhost:    java Main config_A.txt 6000 \"127.0.0.1:6000-6002\"");
+        System.out.println("Uso: java Main <arquivo_config> [porta_local=6000] [alvos_descoberta]");
+        System.out.println("  LAN (3 PCs):  java Main config.txt");
+        System.out.println("  localhost:    java Main config_A.txt 6000 \"127.0.0.1:6000-6002\"");
     }
 
     /** Interpreta "host:porta" ou "host:inicio-fim", separados por vírgula. */
@@ -69,20 +69,19 @@ public class Main {
     }
 
     private static void printMenu(RingNode node) {
-        Console.println("");
-        Console.println("==================== MENU (" + node.selfNick() + ") ====================");
-        Console.println(" Anel: " + node.ringDiagram() + "   | mestre: " + node.masterNick()
+        System.out.println();
+        System.out.println("==================== MENU (" + node.selfNick() + ") ====================");
+        System.out.println(" Anel: " + node.ringDiagram() + "   | mestre: " + node.masterNick()
                 + (node.isMaster() ? " (sou eu)" : ""));
-        Console.println(" 1) Enviar mensagem (unicast)");
-        Console.println(" 2) Enviar mensagem em BROADCAST");
-        Console.println(" 3) Inserir/gerar token na rede");
-        Console.println(" 4) Retirar token da rede");
-        Console.println(" 5) Mostrar estado (anel, fila, token)");
-        Console.println(" 6) Reenviar DISCOVER (redescobrir o anel)");
-        Console.println(" 0) Sair");
-        Console.println("=========================================================");
-        Console.print("> ");
-        Console.setPrompt("> ");
+        System.out.println(" 1) Enviar mensagem (unicast)");
+        System.out.println(" 2) Enviar mensagem em BROADCAST");
+        System.out.println(" 3) Inserir/gerar token na rede");
+        System.out.println(" 4) Retirar token da rede");
+        System.out.println(" 5) Mostrar estado (anel, fila, token)");
+        System.out.println(" 6) Reenviar DISCOVER (redescobrir o anel)");
+        System.out.println(" 0) Sair");
+        System.out.println("=========================================================");
+        System.out.print("> ");
     }
 
     private static void runMenu(RingNode node) {
@@ -97,44 +96,40 @@ public class Main {
             String line = sc.nextLine().trim();
             if (line.isEmpty()) { printMenu(node); continue; }
             switch (line) {
-                case "1" ->  {
-                    Console.print("Apelido do destino: ");
-                    Console.setPrompt("Apelido do destino: ");
+                case "1": {
+                    System.out.print("Apelido do destino: ");
                     String dest = sc.hasNextLine() ? sc.nextLine().trim() : "";
-                    Console.print("Mensagem: ");
-                    Console.setPrompt("Mensagem: ");
+                    System.out.print("Mensagem: ");
                     String msg = sc.hasNextLine() ? sc.nextLine() : "";
-                    Console.clearPrompt();
-                    if (dest.isEmpty()) { Console.println("Destino inválido."); }
+                    if (dest.isEmpty()) { System.out.println("Destino inválido."); break; }
                     boolean ok = node.enqueue(dest, msg);
-                    Console.println(ok ? "Mensagem enfileirada para '" + dest + "'."
+                    System.out.println(ok ? "Mensagem enfileirada para '" + dest + "'."
                             : "Fila cheia (máx. " + MessageQueue.MAX + ").");
+                    break;
                 }
-                case "2" ->  {
-                    Console.print("Mensagem (broadcast): ");
-                    Console.setPrompt("Mensagem (broadcast): ");
+                case "2": {
+                    System.out.print("Mensagem (broadcast): ");
                     String msg = sc.hasNextLine() ? sc.nextLine() : "";
-                    Console.clearPrompt();
                     boolean ok = node.enqueue(Packet.BROADCAST, msg);
-                    Console.println(ok ? "Mensagem broadcast enfileirada."
+                    System.out.println(ok ? "Mensagem broadcast enfileirada."
                             : "Fila cheia (máx. " + MessageQueue.MAX + ").");
+                    break;
                 }
-                case "3" -> node.insertToken();
-                case "4" -> node.requestRemoveToken();
-                case "5" ->  {
-                    Console.println("Anel:   " + node.ringDiagram());
-                    Console.println("Mestre: " + node.masterNick() + (node.isMaster() ? " (sou eu)" : ""));
-                    Console.println("Aguardando retorno de dados: " + node.isAwaitingReturn());
+                case "3": node.insertToken(); break;
+                case "4": node.requestRemoveToken(); break;
+                case "5": {
+                    System.out.println("Anel:   " + node.ringDiagram());
+                    System.out.println("Mestre: " + node.masterNick() + (node.isMaster() ? " (sou eu)" : ""));
+                    System.out.println("Aguardando retorno de dados: " + node.isAwaitingReturn());
                     List<String> q = node.queueDescribe();
-                    Console.println("Fila (" + node.queueSize() + "/" + MessageQueue.MAX + "):" );
-                    if (q.isEmpty()) Console.println("  (vazia)");
-                    else for (String s : q) Console.println("  " + s);
+                    System.out.println("Fila (" + node.queueSize() + "/" + MessageQueue.MAX + "):");
+                    if (q.isEmpty()) System.out.println("  (vazia)");
+                    else for (String s : q) System.out.println("  " + s);
+                    break;
                 }
-                case "6" -> node.sendDiscover();
-                case "0" -> {
-                    Console.println("Encerrando."); System.exit(0);
-                }
-                default -> Console.println("Opção inválida.");
+                case "6": node.sendDiscover(); break;
+                case "0": System.out.println("Encerrando."); System.exit(0); break;
+                default: System.out.println("Opção inválida.");
             }
             printMenu(node);
         }
