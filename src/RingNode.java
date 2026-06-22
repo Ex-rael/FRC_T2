@@ -50,6 +50,10 @@ public class RingNode {
     private volatile long lastTokenAtMaster = 0L;          // última passagem do token pelo mestre
     private volatile boolean firstTokenDone = false;       // já existe token na rede?
     private volatile boolean running = true;
+    // true apenas durante o sleepSeconds(tokenTime) em onToken() — usado por leave()
+    // para acordar o receiver e garantir que o token seja repassado antes de sair.
+    private volatile boolean inTokenSleep = false;
+    private Thread receiverThread;
 
     public RingNode(Config cfg, int bindPort, List<InetSocketAddress> discoveryTargets) throws Exception {
         this.cfg = cfg;
@@ -70,16 +74,17 @@ public class RingNode {
 
     public void start() {
         log("Máquina '" + selfNick + "' iniciada em " + selfIp + ":" + bindPort + " | " + cfg);
-        startDaemon(this::receiveLoop, "receiver");
+        receiverThread = startDaemon(this::receiveLoop, "receiver");
         startDaemon(this::monitorLoop, "monitor");
         startDaemon(this::bootstrapToken, "bootstrap");
         sendDiscover();
     }
 
-    private void startDaemon(Runnable r, String name) {
+    private Thread startDaemon(Runnable r, String name) {
         Thread t = new Thread(r, name);
         t.setDaemon(true);
         t.start();
+        return t;
     }
 
     // ===== DESCOBERTA (DISCOVER/HELLO) =====
@@ -126,6 +131,7 @@ public class RingNode {
         switch (Packet.typeOf(raw)) {
             case Packet.DISCOVER: onDiscover(raw, src, srcPort); break;
             case Packet.HELLO:    onHello(raw, src, srcPort);    break;
+            case Packet.LEAVE:    onLeave(raw);                  break;
             case Packet.TOKEN:    onToken();                     break;
             case Packet.DATA:     onData(raw);                   break;
             default:              log("Pacote desconhecido recebido: " + raw);
@@ -156,6 +162,29 @@ public class RingNode {
             log("HELLO de '" + nick + "' (" + src.getHostAddress() + ":" + srcPort
                     + "). Nova topologia: " + peers.diagram());
             tryStartFirstToken("nova máquina descoberta: '" + nick + "'");
+        }
+    }
+
+    private void onLeave(String raw) {
+        String[] p = raw.split(":", 3);
+        if (p.length < 2) return;
+        String nick = p[1];
+        if (nick.equals(selfNick)) return; // ignora eco do próprio broadcast
+        boolean removed = peers.remove(nick);
+        if (!removed) return;
+        log("LEAVE de '" + nick + "': saiu da rede graciosamente. Nova topologia: " + peers.diagram());
+
+        // Se estávamos aguardando retorno de dados cujo destino era o nó que saiu,
+        // não há mais ninguém para confirmar (ACK/NAK). Libera o token imediatamente.
+        if (awaitingReturn) {
+            OutgoingMessage m = queue.peek();
+            if (m != null && m.dest.equals(nick)) {
+                log("[LEAVE] destino '" + nick + "' saiu. Descartando mensagem pendente e liberando token.");
+                queue.removeHead();
+                awaitingReturn = false;
+                dataSentAt = 0;
+                forwardToken();
+            }
         }
     }
 
@@ -212,7 +241,9 @@ public class RingNode {
         }
 
         log("[TOKEN] recebido. " + (queue.isEmpty() ? "Fila vazia." : "Há mensagens na fila."));
+        inTokenSleep = true;
         sleepSeconds(cfg.tokenTime); // segura o token ("tempo do token") para visualização
+        inTokenSleep = false;
 
         OutgoingMessage m = queue.peek();
         if (m != null) {
@@ -286,6 +317,30 @@ public class RingNode {
     public void requestRemoveToken() {
         removeTokenRequested = true;
         log("Retirada do token solicitada: o próximo token que chegar será removido.");
+    }
+
+    /**
+     * Desligamento gracioso: anuncia a saída via broadcast LEAVE para que os
+     * demais nós removam este peer do anel e encerra o socket.
+     * Deve ser chamado antes de System.exit() pelo menu.
+     *
+     * Se este nó está no meio do sleep de retenção do token (inTokenSleep),
+     * interrompe o sleep para que o receiver repasse o token imediatamente,
+     * evitando que o anel perca o token ao sair.
+     */
+    public void leave() {
+        running = false;
+        if (inTokenSleep && receiverThread != null) {
+            receiverThread.interrupt(); // acorda do sleepSeconds em onToken()
+            // aguarda o repasse (no máximo tokenTime + 500 ms)
+            long deadline = System.currentTimeMillis() + (long)(cfg.tokenTime * 1000) + 500;
+            while (inTokenSleep && System.currentTimeMillis() < deadline) {
+                sleepMillis(30);
+            }
+        }
+        log("Saindo da rede (desconexão graciosa). Anunciando LEAVE.");
+        broadcast(Packet.leave(selfNick, selfIp));
+        socket.close();
     }
 
     // ===== DADOS =====

@@ -135,7 +135,11 @@ public class Main {
                     break;
                 }
                 case "6": node.sendDiscover(); break;
-                case "0": System.out.println("Encerrando."); System.exit(0); break;
+                case "0":
+                    System.out.println("Encerrando.");
+                    node.leave();
+                    System.exit(0);
+                    break;
                 default: System.out.println("Opção inválida.");
             }
             printMenu(node);

@@ -21,6 +21,7 @@ import java.util.zip.CRC32;
 public class Packet {
     public static final String DISCOVER = "10";
     public static final String HELLO    = "20";
+    public static final String LEAVE    = "30";
     public static final String TOKEN    = "1000";
     public static final String DATA     = "2000";
 
@@ -48,6 +49,10 @@ public class Packet {
 
     public static String hello(String nick, String ip, long birthTime) {
         return HELLO + ":" + nick + ":" + ip + ":" + birthTime;
+    }
+
+    public static String leave(String nick, String ip) {
+        return LEAVE + ":" + nick + ":" + ip;
     }
 
     public static String token() {
