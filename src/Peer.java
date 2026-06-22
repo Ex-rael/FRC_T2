@@ -10,12 +10,14 @@ public class Peer {
     public volatile InetAddress address;
     public volatile int port;
     public volatile long lastSeen;
+    public volatile long insertionTime;
 
     public Peer(String nickname, InetAddress address, int port) {
         this.nickname = nickname;
         this.address = address;
         this.port = port;
         this.lastSeen = System.currentTimeMillis();
+        this.insertionTime = this.lastSeen;
     }
 
     @Override

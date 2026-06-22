@@ -112,6 +112,9 @@ public class RingNode {
                 while (raw.endsWith("\n") || raw.endsWith("\r")) {
                     raw = raw.substring(0, raw.length() - 1);
                 }
+                // Marca peer como visto (atualiza lastSeen) mesmo para pacotes
+                // que não trazem apelido (TOKEN), usando endereço/porta.
+                peers.markSeenByAddr(pkt.getAddress(), pkt.getPort(), System.currentTimeMillis());
                 handle(raw, pkt.getAddress(), pkt.getPort());
             } catch (Exception e) {
                 if (running) log("Erro na recepção: " + e.getMessage());
@@ -124,9 +127,42 @@ public class RingNode {
         switch (Packet.typeOf(raw)) {
             case Packet.DISCOVER: onDiscover(raw, src, srcPort); break;
             case Packet.HELLO:    onHello(raw, src, srcPort);    break;
+            case Packet.CLAIM:    onClaim(raw, src, srcPort);    break;
             case Packet.TOKEN:    onToken();                     break;
             case Packet.DATA:     onData(raw);                   break;
             default:              log("Pacote desconhecido recebido: " + raw);
+        }
+    }
+
+    private volatile boolean claimLost = false;
+
+    private void onClaim(String raw, InetAddress src, int srcPort) {
+        String[] p = raw.split(":", 4);
+        if (p.length < 3) return;
+        String nick = p[1];
+        if (nick.equals(selfNick)) return;
+        long theirInsertion = 0L;
+        try { theirInsertion = Long.parseLong(p[2]); } catch (Exception ignored) {}
+
+        long now = System.currentTimeMillis();
+        long peerStaleMs = (long) (cfg.tokenTimeout * cfg.peerStaleMultiplier * 1000);
+        peers.addOrUpdate(nick, src, srcPort, now, peerStaleMs);
+
+        // If we are currently trying to claim the token and the other peer has
+        // priority (earlier insertionTime or tie-broken by nickname), then
+        // mark claimLost so the claiming thread aborts.
+        Peer selfPeer = peers.get(selfNick);
+        long myInsertion = (selfPeer != null) ? selfPeer.insertionTime : 0L;
+        boolean otherHasPriority = false;
+        if (theirInsertion > 0) {
+            if (theirInsertion < myInsertion) otherHasPriority = true;
+            else if (theirInsertion == myInsertion && nick.compareTo(selfNick) < 0) otherHasPriority = true;
+        }
+        if (otherHasPriority) {
+            synchronized (this) {
+                claimLost = true;
+                this.notifyAll();
+            }
         }
     }
 
@@ -135,7 +171,9 @@ public class RingNode {
         if (p.length < 2) return;
         String nick = p[1];
         if (nick.equals(selfNick)) return; // ignora a si mesmo
-        boolean changed = peers.addOrUpdate(nick, src, srcPort);
+        long now = System.currentTimeMillis();
+        long peerStaleMs = (long) (cfg.tokenTimeout * cfg.peerStaleMultiplier * 1000);
+        boolean changed = peers.addOrUpdate(nick, src, srcPort, now, peerStaleMs);
         if (changed) {
             log("DISCOVER de '" + nick + "' (" + src.getHostAddress() + ":" + srcPort
                     + "). Nova topologia: " + peers.diagram());
@@ -149,7 +187,9 @@ public class RingNode {
         if (p.length < 2) return;
         String nick = p[1];
         if (nick.equals(selfNick)) return;
-        boolean changed = peers.addOrUpdate(nick, src, srcPort);
+        long now = System.currentTimeMillis();
+        long peerStaleMs = (long) (cfg.tokenTimeout * cfg.peerStaleMultiplier * 1000);
+        boolean changed = peers.addOrUpdate(nick, src, srcPort, now, peerStaleMs);
         if (changed) {
             log("HELLO de '" + nick + "' (" + src.getHostAddress() + ":" + srcPort
                     + "). Nova topologia: " + peers.diagram());
@@ -207,7 +247,9 @@ public class RingNode {
     /** Repassa o token para o sucessor do anel. */
     private void forwardToken() {
         awaitingReturn = false;
-        Peer s = peers.successor();
+        long now = System.currentTimeMillis();
+        long peerStaleMs = (long) (cfg.tokenTimeout * cfg.peerStaleMultiplier * 1000);
+        Peer s = peers.successorAlive(now - peerStaleMs);
         if (s == null) {
             log("Sem sucessor; token retido.");
             return;
@@ -228,8 +270,8 @@ public class RingNode {
     }
 
     /**
-     * Gera o primeiro token do anel, caso este nó seja a máquina mestre
-     * (primeira em ordem alfabética) e ainda não exista token na rede.
+    * Gera o primeiro token do anel, caso este nó seja a máquina mestre
+    * (a primeira que entrou na rede) e ainda não exista token na rede.
      *
      * Só efetivamente inicia a circulação quando há pelo menos outra máquina
      * conhecida (caso contrário, fica esperando). É chamado de forma reativa
@@ -248,6 +290,51 @@ public class RingNode {
             return;
         }
         if (peers.size() <= 1) return; // ainda sozinho no anel; aguarda
+
+        // Para evitar geração simultânea de tokens por mestres diferentes
+        // (condição possível com perda de pacotes UDP), usamos um protocolo
+        // leve de CLAIM: anunciamos nossa intenção com nosso insertionTime
+        // e aguardamos um curto período; se outro nó com prioridade responder
+        // ou anunciar, abortamos.
+        long requestTime = System.currentTimeMillis();
+        double backoffMin = Math.max(0.0, cfg.claimBackoffMin);
+        double backoffMax = Math.max(backoffMin, cfg.claimBackoffMax);
+        int delayMs = (int) Math.round((backoffMin + rng.nextDouble() * (backoffMax - backoffMin)) * 1000);
+        if (delayMs <= 0) delayMs = 1;
+        Peer selfPeer = peers.get(selfNick);
+        long myInsertion = (selfPeer != null) ? selfPeer.insertionTime : System.currentTimeMillis();
+        claimLost = false;
+        String claimMsg = Packet.claim(selfNick, myInsertion);
+        log("[MONITOR] anunciando CLAIM (insertion=" + myInsertion + ") e aguardando " + delayMs + "ms (" + motivo + ").");
+
+        int sent = 0;
+        int intervalMs = 250;
+        while (sent < delayMs && !claimLost && !firstTokenDone) {
+            broadcast(claimMsg);
+            int stepMs = Math.min(intervalMs, delayMs - sent);
+            try {
+                this.wait(stepMs);
+            } catch (InterruptedException ignored) {
+                Thread.currentThread().interrupt();
+            }
+            sent += stepMs;
+        }
+
+        // Rechecagens após o backoff
+        if (firstTokenDone) return; // outro thread já gerou
+        if (!peers.isMaster()) { firstTokenDone = true; return; }
+        if (claimLost) {
+            firstTokenDone = true; // outro nó tem prioridade; aborta
+            log("[MONITOR] CLAIM perdido para outro nó; abortando geração do token.");
+            return;
+        }
+        // Se houve atividade recente no anel durante o backoff, aborta.
+        if (lastRingActivity > requestTime) {
+            firstTokenDone = true; // há token em circulação
+            log("[MONITOR] atividade detectada durante backoff; abortando geração do token.");
+            return;
+        }
+
         firstTokenDone = true;
         lastRingActivity = System.currentTimeMillis();
         lastTokenAtMaster = System.currentTimeMillis();
@@ -290,7 +377,9 @@ public class RingNode {
         if (m.forceNoError) log("[RETRANSMISSÃO] reenviando mensagem para '" + m.dest + "' sem erro.");
 
         String pkt = Packet.data(selfNick, m.dest, Packet.NONEXISTENT, crc, content);
-        Peer s = peers.successor();
+        long now = System.currentTimeMillis();
+        long peerStaleMs = (long) (cfg.tokenTimeout * cfg.peerStaleMultiplier * 1000);
+        Peer s = peers.successorAlive(now - peerStaleMs);
         if (s == null) {
             log("Sem sucessor; não há para onde enviar os dados.");
             awaitingReturn = false;
@@ -388,9 +477,11 @@ public class RingNode {
     }
 
     private void forwardData(String raw) {
-        Peer s = peers.successor();
+        long now = System.currentTimeMillis();
+        long peerStaleMs = (long) (cfg.tokenTimeout * cfg.peerStaleMultiplier * 1000);
+        Peer s = peers.successorAlive(now - peerStaleMs);
         if (s == null) {
-            log("Sem sucessor; dados descartados.");
+            log("Sem sucessor vivo; dados descartados.");
             return;
         }
         log("[DADOS] repassado para '" + s.nickname + "'.");
@@ -407,7 +498,7 @@ public class RingNode {
             // Recuperação de dados presos (qualquer origem): se os dados não
             // retornarem em tempo, libera o token para não travar o anel.
             if (awaitingReturn && dataSentAt > 0
-                    && now - dataSentAt > (long) (cfg.tokenTimeout * 1000) * 3) {
+                    && now - dataSentAt > (long) (cfg.tokenTimeout * cfg.peerStaleMultiplier * 1000)) {
                 log("[MONITOR] os dados não retornaram (possível perda). Liberando o token; "
                         + "a mensagem permanece na fila.");
                 awaitingReturn = false;
@@ -429,6 +520,12 @@ public class RingNode {
                 lastTokenAtMaster = now;
                 forwardToken();
             }
+            // Remover peers possivelmente inativos da tabela para manter ordem correta.
+            long peerStaleMs = (long) (cfg.tokenTimeout * cfg.peerStaleMultiplier * 1000);
+            boolean removed = peers.pruneStale(now - peerStaleMs);
+            if (removed) {
+                log("[MONITOR] peers inativos removidos; nova topologia: " + peers.diagram());
+            }
         }
     }
 
@@ -440,10 +537,12 @@ public class RingNode {
      * onDiscover/onHello.
      */
     private void bootstrapToken() {
-        sleepMillis(1000);
+        sleepMillis((long) (cfg.discoverInterval * 1000));
         while (running && !firstTokenDone) {
             tryStartFirstToken("verificação periódica de inicialização");
-            sleepMillis(1000);
+            // Garantir descoberta periódica de peers em ambientes UDP ruidosos.
+            sendDiscover();
+            sleepMillis((long) (cfg.discoverInterval * 1000));
         }
     }
 
@@ -488,7 +587,7 @@ public class RingNode {
     }
 
     private void log(String s) {
-        System.out.println("[" + selfNick + "] " + s);
+        Console.println("[" + selfNick + "] " + s);
     }
 
     private void sleepSeconds(double s) { sleepMillis((long) (s * 1000)); }

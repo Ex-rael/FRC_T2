@@ -18,6 +18,7 @@ public class Packet {
     public static final String HELLO    = "20";
     public static final String TOKEN    = "1000";
     public static final String DATA     = "2000";
+    public static final String CLAIM    = "30";
 
     // Valores do campo "controle de erro" do pacote de dados.
     public static final String NONEXISTENT = "maquinainexistente";
@@ -47,6 +48,10 @@ public class Packet {
 
     public static String token() {
         return TOKEN;
+    }
+
+    public static String claim(String nick, long insertionTime) {
+        return CLAIM + ":" + nick + ":" + insertionTime;
     }
 
     public static String data(String origem, String dest, String controle, long crc, String msg) {
