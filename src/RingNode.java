@@ -126,6 +126,7 @@ public class RingNode {
         switch (Packet.typeOf(raw)) {
             case Packet.DISCOVER: onDiscover(raw, src, srcPort); break;
             case Packet.HELLO:    onHello(raw, src, srcPort);    break;
+            case Packet.LEAVE:    onLeave(raw);                  break;
             case Packet.TOKEN:    onToken();                     break;
             case Packet.DATA:     onData(raw);                   break;
             default:              log("Pacote desconhecido recebido: " + raw);
@@ -156,6 +157,29 @@ public class RingNode {
             log("HELLO de '" + nick + "' (" + src.getHostAddress() + ":" + srcPort
                     + "). Nova topologia: " + peers.diagram());
             tryStartFirstToken("nova máquina descoberta: '" + nick + "'");
+        }
+    }
+
+    private void onLeave(String raw) {
+        String[] p = raw.split(":", 3);
+        if (p.length < 2) return;
+        String nick = p[1];
+        if (nick.equals(selfNick)) return; // ignora eco do próprio broadcast
+        boolean removed = peers.remove(nick);
+        if (!removed) return;
+        log("LEAVE de '" + nick + "': saiu da rede graciosamente. Nova topologia: " + peers.diagram());
+
+        // Se estávamos aguardando retorno de dados cujo destino era o nó que saiu,
+        // não há mais ninguém para confirmar (ACK/NAK). Libera o token imediatamente.
+        if (awaitingReturn) {
+            OutgoingMessage m = queue.peek();
+            if (m != null && m.dest.equals(nick)) {
+                log("[LEAVE] destino '" + nick + "' saiu. Descartando mensagem pendente e liberando token.");
+                queue.removeHead();
+                awaitingReturn = false;
+                dataSentAt = 0;
+                forwardToken();
+            }
         }
     }
 
@@ -286,6 +310,18 @@ public class RingNode {
     public void requestRemoveToken() {
         removeTokenRequested = true;
         log("Retirada do token solicitada: o próximo token que chegar será removido.");
+    }
+
+    /**
+     * Desligamento gracioso: anuncia a saída via broadcast LEAVE para que os
+     * demais nós removam este peer do anel e encerra o socket.
+     * Deve ser chamado antes de System.exit() pelo menu.
+     */
+    public void leave() {
+        running = false;
+        log("Saindo da rede (desconexão graciosa). Anunciando LEAVE.");
+        broadcast(Packet.leave(selfNick, selfIp));
+        socket.close();
     }
 
     // ===== DADOS =====
