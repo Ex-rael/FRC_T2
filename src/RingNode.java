@@ -455,8 +455,6 @@ public class RingNode {
 
     private void sendRaw(InetAddress addr, int port, String msg) {
         try {
-            String preview = msg.length() > 80 ? msg.substring(0, 80) + "..." : msg;
-            Console.println("[" + selfNick + "] [SEND] -> " + addr.getHostAddress() + ":" + port + " : " + preview);
             byte[] b = msg.getBytes(StandardCharsets.UTF_8);
             DatagramPacket pkt = new DatagramPacket(b, b.length, addr, port);
             synchronized (sendLock) {
