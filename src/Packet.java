@@ -5,12 +5,17 @@ import java.util.zip.CRC32;
  * Constantes do protocolo e construtores das strings de cada tipo de pacote.
  *
  * O enunciado define os pacotes como sequências numéricas em formato string:
- *   DISCOVER -> "10:apelido:ip"
- *   HELLO    -> "20:apelido:ip"
+ *   DISCOVER -> "10:apelido:ip[:entrada]"
+ *   HELLO    -> "20:apelido:ip[:entrada]"
  *   TOKEN    -> "1000"
  *   DADOS    -> "2000:origem:destino:controle:crc:mensagem"
  *
- * Esses formatos devem ser seguidos fielmente para permitir a interoperação
+ * O campo "entrada" (epoch ms em que a máquina entrou na rede) é uma EXTENSÃO
+ * usada para eleger o master pelo tempo de entrada (a máquina mais antiga). Ele
+ * vai no fim do DISCOVER/HELLO para não atrapalhar quem lê apenas "tipo:apelido:ip";
+ * pacotes sem esse campo ainda são aceitos (ver RingNode.parseBirth).
+ *
+ * Os demais formatos devem ser seguidos fielmente para permitir a interoperação
  * entre implementações de grupos diferentes.
  */
 public class Packet {
@@ -18,7 +23,6 @@ public class Packet {
     public static final String HELLO    = "20";
     public static final String TOKEN    = "1000";
     public static final String DATA     = "2000";
-    public static final String CLAIM    = "30";
 
     // Valores do campo "controle de erro" do pacote de dados.
     public static final String NONEXISTENT = "maquinainexistente";
@@ -38,20 +42,16 @@ public class Packet {
         return c.getValue();
     }
 
-    public static String discover(String nick, String ip) {
-        return DISCOVER + ":" + nick + ":" + ip;
+    public static String discover(String nick, String ip, long birthTime) {
+        return DISCOVER + ":" + nick + ":" + ip + ":" + birthTime;
     }
 
-    public static String hello(String nick, String ip) {
-        return HELLO + ":" + nick + ":" + ip;
+    public static String hello(String nick, String ip, long birthTime) {
+        return HELLO + ":" + nick + ":" + ip + ":" + birthTime;
     }
 
     public static String token() {
         return TOKEN;
-    }
-
-    public static String claim(String nick, long insertionTime) {
-        return CLAIM + ":" + nick + ":" + insertionTime;
     }
 
     public static String data(String origem, String dest, String controle, long crc, String msg) {

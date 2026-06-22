@@ -39,9 +39,10 @@ public class RingNode {
     private final Random rng = new Random();
     private final String selfNick;
     private final String selfIp;
+    private final long selfBirthTime; // instante (epoch ms) em que esta máquina entrou na rede
     private final Object sendLock = new Object();
 
-    // ---- Estado do token / dados (compartilhado entre threads) ----
+    // ===== Estado do token / dados (compartilhado entre threads) =====
     private volatile boolean removeTokenRequested = false; // usuário pediu retirada do token
     private volatile boolean awaitingReturn = false;       // origem aguardando os dados darem a volta
     private volatile long dataSentAt = 0L;                  // instante do último envio de dados
@@ -56,6 +57,7 @@ public class RingNode {
         this.bindPort = bindPort;
         this.discoveryTargets = discoveryTargets;
         this.selfIp = primaryLocalIp();
+        this.selfBirthTime = System.currentTimeMillis();
 
         // Socket UDP ligado à porta local, com reuso de endereço e broadcast.
         this.socket = new DatagramSocket(null);
@@ -63,7 +65,7 @@ public class RingNode {
         this.socket.setBroadcast(true);
         this.socket.bind(new InetSocketAddress(bindPort));
 
-        this.peers = new PeerRegistry(selfNick, InetAddress.getByName(selfIp), bindPort);
+        this.peers = new PeerRegistry(selfNick, InetAddress.getByName(selfIp), bindPort, selfBirthTime);
     }
 
     public void start() {
@@ -80,16 +82,16 @@ public class RingNode {
         t.start();
     }
 
-    // ===================== DESCOBERTA (DISCOVER/HELLO) =====================
+    // ===== DESCOBERTA (DISCOVER/HELLO) =====
 
-    /** Envia DISCOVER (broadcast) se identificando. */
+    /** Envia DISCOVER (broadcast) se identificando (com o carimbo de entrada). */
     public void sendDiscover() {
-        broadcast(Packet.discover(selfNick, selfIp));
+        broadcast(Packet.discover(selfNick, selfIp, selfBirthTime));
         log("DISCOVER enviado (procurando outras máquinas).");
     }
 
     private void sendHello() {
-        broadcast(Packet.hello(selfNick, selfIp));
+        broadcast(Packet.hello(selfNick, selfIp, selfBirthTime));
     }
 
     private void broadcast(String msg) {
@@ -98,7 +100,7 @@ public class RingNode {
         }
     }
 
-    // ============================ RECEPÇÃO ============================
+    // ===== RECEPÇÃO =====
 
     private void receiveLoop() {
         byte[] buf = new byte[65535];
@@ -131,11 +133,11 @@ public class RingNode {
     }
 
     private void onDiscover(String raw, InetAddress src, int srcPort) {
-        String[] p = raw.split(":", 3);
+        String[] p = raw.split(":", 4);
         if (p.length < 2) return;
         String nick = p[1];
-        if (nick.equals(selfNick)) return; // ignora a si mesmo
-        boolean changed = peers.addOrUpdate(nick, src, srcPort);
+        if (nick.equals(selfNick)) return;
+        boolean changed = peers.addOrUpdate(nick, src, srcPort, parseBirth(p));
         if (changed) {
             log("DISCOVER de '" + nick + "' (" + src.getHostAddress() + ":" + srcPort
                     + "). Nova topologia: " + peers.diagram());
@@ -145,11 +147,11 @@ public class RingNode {
     }
 
     private void onHello(String raw, InetAddress src, int srcPort) {
-        String[] p = raw.split(":", 3);
+        String[] p = raw.split(":", 4);
         if (p.length < 2) return;
         String nick = p[1];
         if (nick.equals(selfNick)) return;
-        boolean changed = peers.addOrUpdate(nick, src, srcPort);
+        boolean changed = peers.addOrUpdate(nick, src, srcPort, parseBirth(p));
         if (changed) {
             log("HELLO de '" + nick + "' (" + src.getHostAddress() + ":" + srcPort
                     + "). Nova topologia: " + peers.diagram());
@@ -157,7 +159,23 @@ public class RingNode {
         }
     }
 
-    // ============================== TOKEN ==============================
+    /**
+     * Extrai o carimbo de entrada (epoch ms) de um DISCOVER/HELLO já dividido.
+     * Pacotes sem o campo (formato antigo "tipo:apelido:ip") são aceitos: assume-se
+     * o instante atual como entrada, o que não permite que essa máquina seja eleita
+     * mestre à frente de quem realmente anunciou um carimbo mais antigo.
+     */
+    private static long parseBirth(String[] p) {
+        if (p.length >= 4) {
+            try {
+                return Long.parseLong(p[3].trim());
+            } catch (NumberFormatException ignored) {
+            }
+        }
+        return System.currentTimeMillis();
+    }
+
+    // ===== TOKEN =====
 
     private void onToken() {
         lastRingActivity = System.currentTimeMillis();
@@ -229,7 +247,7 @@ public class RingNode {
 
     /**
      * Gera o primeiro token do anel, caso este nó seja a máquina mestre
-     * (primeira em ordem alfabética) e ainda não exista token na rede.
+     * (a primeira a entrar na rede) e ainda não exista token na rede.
      *
      * Só efetivamente inicia a circulação quando há pelo menos outra máquina
      * conhecida (caso contrário, fica esperando). É chamado de forma reativa
@@ -270,7 +288,7 @@ public class RingNode {
         log("Retirada do token solicitada: o próximo token que chegar será removido.");
     }
 
-    // ============================== DADOS ==============================
+    // ===== DADOS =====
 
     /** Monta e envia o pacote de dados da mensagem do topo da fila. */
     private void sendData(OutgoingMessage m) {
@@ -397,7 +415,7 @@ public class RingNode {
         sendTo(s, raw);
     }
 
-    // ===================== MONITOR DO TOKEN =====================
+    // ===== MONITOR DO TOKEN =====
 
     private void monitorLoop() {
         while (running) {
@@ -447,7 +465,7 @@ public class RingNode {
         }
     }
 
-    // ===================== ENVIO BRUTO PELO SOCKET =====================
+    // ===== ENVIO BRUTO PELO SOCKET =====
 
     private void sendTo(Peer p, String msg) {
         sendRaw(p.address, p.port, msg);
@@ -465,7 +483,7 @@ public class RingNode {
         }
     }
 
-    // ===================== INTERFACE PARA O MENU =====================
+    // ===== INTERFACE PARA O MENU =====
 
     public boolean enqueue(String dest, String content) { return queue.add(dest, content); }
     public List<String> queueDescribe() { return queue.describe(); }
@@ -476,7 +494,7 @@ public class RingNode {
     public boolean isAwaitingReturn() { return awaitingReturn; }
     public String selfNick() { return selfNick; }
 
-    // ===================== UTILIDADES =====================
+    // ===== UTILIDADES =====
 
     /** Corrompe um caractere da mensagem (para simular erro de transmissão). */
     private String corrupt(String s) {

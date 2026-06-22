@@ -24,7 +24,7 @@ Cada máquina é um processo Java independente que:
    o token seguir adiante.
 4. Insere um **CRC32** em cada mensagem e pode **injetar erros** (com uma
    probabilidade configurável) para exercitar a detecção de falhas (ACK/NAK).
-5. A **máquina inicial** (primeira em ordem alfabética) gera o primeiro token e o
+5. A **máquina inicial** (a primeira a entrar na rede) gera o primeiro token e o
    **monitora**: detecta token perdido (timeout) e token duplicado (intervalo
    mínimo).
 
@@ -47,7 +47,7 @@ Todas as classes ficam em `src/` (pacote padrão):
 |------------------------|------------------|
 | `Config.java`          | Lê o arquivo de configuração (apelido, tempos, probabilidade de erro). |
 | `Peer.java`            | Endpoint de uma máquina conhecida (apelido + IP + porta). |
-| `PeerRegistry.java`    | Tabela de máquinas e cálculo da topologia do anel (sucessor, mestre). |
+| `PeerRegistry.java`    | Tabela de máquinas e cálculo da topologia do anel (sucessor; mestre = quem entrou primeiro). |
 | `OutgoingMessage.java` | Mensagem na fila de saída (destino + conteúdo + estado de retransmissão). |
 | `MessageQueue.java`    | Fila limitada (10) e *thread-safe* de mensagens de saída. |
 | `Packet.java`          | Constantes do protocolo, montagem das strings dos pacotes e **CRC32**. |
@@ -156,13 +156,18 @@ Todos os pacotes são **strings**. O primeiro número identifica o tipo.
 
 | Tipo     | Valor  | Formato                                                   | Exemplo |
 |----------|--------|-----------------------------------------------------------|---------|
-| DISCOVER | `10`   | `10:<apelido>:<ip>`                                       | `10:A:10.32.143.20` |
-| HELLO    | `20`   | `20:<apelido>:<ip>`                                       | `20:B:10.32.143.21` |
+| DISCOVER | `10`   | `10:<apelido>:<ip>:<entrada>`                            | `10:A:10.32.143.20:1718000000000` |
+| HELLO    | `20`   | `20:<apelido>:<ip>:<entrada>`                            | `20:B:10.32.143.21:1718000000000` |
 | TOKEN    | `1000` | `1000`                                                   | `1000` |
 | DADOS    | `2000` | `2000:<origem>:<destino>:<controle>:<crc>:<mensagem>`     | `2000:B:A:maquinainexistente:19385749:Oi pessoal!` |
 
 O campo **controle** assume `maquinainexistente`, `ACK` ou `NAK`. A mensagem é
 sempre o **último** campo, então pode conter `:` (a divisão usa limite 6).
+
+O campo **entrada** (epoch ms em que a máquina entrou na rede) é uma **extensão**
+deste trabalho, usada para eleger a máquina mestre pelo tempo de entrada (ver §6,
+Passo 3). Ele vai no **fim** do DISCOVER/HELLO para não atrapalhar implementações
+que leem apenas `tipo:apelido:ip`; pacotes sem esse campo continuam sendo aceitos.
 
 ---
 
@@ -190,9 +195,17 @@ máquina é descoberta.
 
 ### Passo 3 — Geração do token
 
-A **máquina inicial** (a primeira em ordem alfabética, normalmente `A`) gera o
-primeiro token assim que a descoberta estabiliza e o envia ao sucessor. Qualquer
-máquina também pode **inserir** um token manualmente pelo menu (opção 3).
+A **máquina inicial** (a **primeira a entrar na rede**) gera o primeiro token
+assim que a descoberta estabiliza e o envia ao sucessor. Qualquer máquina também
+pode **inserir** um token manualmente pelo menu (opção 3).
+
+> **Como o mestre é escolhido:** cada máquina carimba seu instante de entrada
+> (epoch ms) ao iniciar e o anuncia no DISCOVER/HELLO. O mestre é a máquina de
+> **menor carimbo** (empate é desempatado pelo menor apelido). Como o carimbo é
+> gerado uma única vez e propagado igual para todas, todas elegem o mesmo mestre,
+> mesmo com relógios não sincronizados. **Atenção:** isto difere do enunciado, que
+> define o mestre como a primeira máquina em **ordem alfabética**. A ordem do anel
+> (sucessor) continua sendo alfabética.
 
 ### Passo 4 — Recebimento do token
 
@@ -350,9 +363,14 @@ recebido e compara — se diferir, marca **NAK**; se igual, **ACK**.
 
 ## 11. Observações e limitações
 
-- **Interoperação:** os formatos de pacote seguem fielmente o enunciado. Para a
-  apresentação entre grupos, use a porta padrão **6000** e identifique as máquinas
-  pelo **IP** (modo LAN, item 3a).
+- **Interoperação:** os pacotes de **token** e **dados** seguem fielmente o
+  enunciado. Há duas diferenças no DISCOVER/HELLO e na escolha do mestre: o
+  DISCOVER/HELLO leva um campo extra de **entrada** no fim (ver §5) e o **mestre**
+  é eleito por **tempo de entrada** (não por ordem alfabética). O campo extra é
+  ignorado por quem lê só `tipo:apelido:ip`, mas a eleição do mestre **não** será
+  compatível com grupos que usem a regra alfabética. Para a apresentação entre
+  grupos, use a porta padrão **6000** e identifique as máquinas pelo **IP** (modo
+  LAN, item 3a).
 - **Envio para si mesmo:** mensagens cujo destino é o próprio apelido retornam
   como `maquinainexistente` (cenário degenerado; não é um caso de uso real).
 - **Ajuste de tempos:** veja a dica no §4. Tempos mal dimensionados podem gerar

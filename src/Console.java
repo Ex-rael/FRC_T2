@@ -23,7 +23,7 @@ public class Console {
     public static void print(String s) {
         synchronized (lock) {
             if (paused) {
-                // preserve as a single buffered line
+                // mantém como uma única linha no buffer
                 if (buffer.isEmpty()) buffer.add(s);
                 else {
                     int last = buffer.size() - 1;

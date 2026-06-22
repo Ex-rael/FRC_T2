@@ -10,14 +10,14 @@ public class Peer {
     public volatile InetAddress address;
     public volatile int port;
     public volatile long lastSeen;
-    public volatile long insertionTime;
+    public volatile long birthTime; // instante (epoch ms) em que a máquina entrou na rede
 
-    public Peer(String nickname, InetAddress address, int port) {
+    public Peer(String nickname, InetAddress address, int port, long birthTime) {
         this.nickname = nickname;
         this.address = address;
         this.port = port;
         this.lastSeen = System.currentTimeMillis();
-        this.insertionTime = this.lastSeen;
+        this.birthTime = birthTime;
     }
 
     @Override
