@@ -28,3 +28,10 @@ replay_pid*
 
 .claude/
 CLAUDE.md
+
+# Relatório LaTeX e enunciado
+main.tex
+*.pdf
+
+# Arquivos internos do Claude Code
+docs/superpowers/
