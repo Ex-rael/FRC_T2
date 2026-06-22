@@ -112,6 +112,12 @@ public class RingNode {
                 while (raw.endsWith("\n") || raw.endsWith("\r")) {
                     raw = raw.substring(0, raw.length() - 1);
                 }
+                String type = Packet.typeOf(raw);
+                if (Packet.TOKEN.equals(type) || Packet.DATA.equals(type) || Packet.DISCOVER.equals(type)
+                        || Packet.HELLO.equals(type)) {
+                    log("[RECV] " + pkt.getAddress().getHostAddress() + ":" + pkt.getPort()
+                            + " -> " + type + " " + raw);
+                }
                 // Marca peer como visto (atualiza lastSeen) mesmo para pacotes
                 // que não trazem apelido (TOKEN), usando endereço/porta.
                 peers.markSeenByAddr(pkt.getAddress(), pkt.getPort(), System.currentTimeMillis());
@@ -538,8 +544,10 @@ public class RingNode {
      */
     private void bootstrapToken() {
         sleepMillis((long) (cfg.discoverInterval * 1000));
-        while (running && !firstTokenDone) {
-            tryStartFirstToken("verificação periódica de inicialização");
+        while (running) {
+            if (!firstTokenDone) {
+                tryStartFirstToken("verificação periódica de inicialização");
+            }
             // Garantir descoberta periódica de peers em ambientes UDP ruidosos.
             sendDiscover();
             sleepMillis((long) (cfg.discoverInterval * 1000));
