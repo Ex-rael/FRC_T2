@@ -98,6 +98,16 @@ public class PeerRegistry {
         return peers.size();
     }
 
+    /**
+     * Remove uma máquina do anel (saída graciosa). Retorna true se o peer
+     * existia e foi removido; false se já não estava no registro.
+     * A própria máquina nunca é removida (selfNick é ignorado).
+     */
+    public synchronized boolean remove(String nick) {
+        if (nick.equals(selfNick)) return false;
+        return peers.remove(nick) != null;
+    }
+
     /** Diagrama do anel, ex.: "A → B → C → A". */
     public synchronized String diagram() {
         List<String> ks = order();
