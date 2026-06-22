@@ -93,14 +93,19 @@ public class Main {
                 sleep(60000);
                 continue;
             }
+            Console.pause();
+            System.out.print("> ");
             String line = sc.nextLine().trim();
+            Console.resume();
             if (line.isEmpty()) { printMenu(node); continue; }
             switch (line) {
                 case "1": {
+                    Console.pause();
                     System.out.print("Apelido do destino: ");
                     String dest = sc.hasNextLine() ? sc.nextLine().trim() : "";
                     System.out.print("Mensagem: ");
                     String msg = sc.hasNextLine() ? sc.nextLine() : "";
+                    Console.resume();
                     if (dest.isEmpty()) { System.out.println("Destino inválido."); break; }
                     boolean ok = node.enqueue(dest, msg);
                     System.out.println(ok ? "Mensagem enfileirada para '" + dest + "'."
@@ -108,8 +113,10 @@ public class Main {
                     break;
                 }
                 case "2": {
+                    Console.pause();
                     System.out.print("Mensagem (broadcast): ");
                     String msg = sc.hasNextLine() ? sc.nextLine() : "";
+                    Console.resume();
                     boolean ok = node.enqueue(Packet.BROADCAST, msg);
                     System.out.println(ok ? "Mensagem broadcast enfileirada."
                             : "Fila cheia (máx. " + MessageQueue.MAX + ").");

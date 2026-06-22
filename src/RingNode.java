@@ -488,7 +488,7 @@ public class RingNode {
     }
 
     private void log(String s) {
-        System.out.println("[" + selfNick + "] " + s);
+        Console.println("[" + selfNick + "] " + s);
     }
 
     private void sleepSeconds(double s) { sleepMillis((long) (s * 1000)); }
