@@ -43,12 +43,12 @@ public class Packet {
         return c.getValue();
     }
 
-    public static String discover(String nick, String ip, long birthTime) {
-        return DISCOVER + ":" + nick + ":" + ip + ":" + birthTime;
+    public static String discover(String nick, String ip, int port, long birthTime) {
+        return DISCOVER + ":" + nick + ":" + ip + ":" + port + ":" + birthTime;
     }
 
-    public static String hello(String nick, String ip, long birthTime) {
-        return HELLO + ":" + nick + ":" + ip + ":" + birthTime;
+    public static String hello(String nick, String ip, int port, long birthTime) {
+        return HELLO + ":" + nick + ":" + ip + ":" + port + ":" + birthTime;
     }
 
     public static String leave(String nick, String ip) {

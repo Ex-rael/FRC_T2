@@ -36,6 +36,7 @@ public class Main {
                         InetAddress.getByName("255.255.255.255"), Packet.DISCOVER_PORT));
 
         RingNode node = new RingNode(cfg, port, targets);
+        System.out.println("[Main] Discovery targets: " + targets);
         node.start();
         runMenu(node);
     }

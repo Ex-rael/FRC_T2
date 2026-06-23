@@ -5,9 +5,13 @@ import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.NetworkInterface;
 import java.nio.charset.StandardCharsets;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.Collections;
 import java.util.List;
 import java.util.Random;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 
 /**
  * Núcleo da aplicação: implementa o nó (máquina) do anel.
@@ -91,15 +95,18 @@ public class RingNode {
 
     /** Envia DISCOVER (broadcast) se identificando (com o carimbo de entrada). */
     public void sendDiscover() {
-        broadcast(Packet.discover(selfNick, selfIp, selfBirthTime));
+        broadcast(Packet.discover(selfNick, selfIp, bindPort, selfBirthTime));
         log("DISCOVER enviado (procurando outras máquinas).");
     }
 
     private void sendHello() {
-        broadcast(Packet.hello(selfNick, selfIp, selfBirthTime));
+        broadcast(Packet.hello(selfNick, selfIp, bindPort, selfBirthTime));
     }
 
     private void broadcast(String msg) {
+        if (discoveryTargets.isEmpty()) {
+            log("[BROADCAST] nenhum target de descoberta configurado!");
+        }
         for (InetSocketAddress t : discoveryTargets) {
             sendRaw(t.getAddress(), t.getPort(), msg);
         }
@@ -139,11 +146,33 @@ public class RingNode {
     }
 
     private void onDiscover(String raw, InetAddress src, int srcPort) {
-        String[] p = raw.split(":", 4);
+        String[] p = raw.split(":", 5);
         if (p.length < 2) return;
         String nick = p[1];
         if (nick.equals(selfNick)) return;
-        boolean changed = peers.addOrUpdate(nick, src, srcPort, parseBirth(p));
+
+        // O DISCOVER agora inclui a porta: "10:nick:ip:porta[:birthTime]"
+        // Se não tiver porta (compatibilidade com versões antigas), usa a porta padrão
+        int discoveredPort = bindPort; // padrão
+        if (p.length >= 4) {
+            try {
+                discoveredPort = Integer.parseInt(p[3].trim());
+            } catch (NumberFormatException ignored) {
+            }
+        }
+
+        // Usa o IP fornecido no DISCOVER (que pode ser localhost ou IP da LAN)
+        InetAddress discoveredAddr = src; // usa o IP de origem como fallback
+        if (p.length >= 3 && !p[2].trim().isEmpty()) {
+            try {
+                // Tenta usar o IP declarado no DISCOVER
+                discoveredAddr = InetAddress.getByName(p[2].trim());
+            } catch (Exception ignored) {
+                // Se falhar, usa o IP de origem
+            }
+        }
+
+        boolean changed = peers.addOrUpdate(nick, discoveredAddr, discoveredPort, parseBirth(p));
         if (changed) {
             log("DISCOVER de '" + nick + "' (" + src.getHostAddress() + ":" + srcPort
                     + "). Nova topologia: " + peers.diagram());
@@ -153,11 +182,29 @@ public class RingNode {
     }
 
     private void onHello(String raw, InetAddress src, int srcPort) {
-        String[] p = raw.split(":", 4);
+        String[] p = raw.split(":", 5);
         if (p.length < 2) return;
         String nick = p[1];
         if (nick.equals(selfNick)) return;
-        boolean changed = peers.addOrUpdate(nick, src, srcPort, parseBirth(p));
+
+        // O HELLO agora inclui a porta: "20:nick:ip:porta[:birthTime]"
+        int discoveredPort = bindPort; // padrão
+        if (p.length >= 4) {
+            try {
+                discoveredPort = Integer.parseInt(p[3].trim());
+            } catch (NumberFormatException ignored) {
+            }
+        }
+
+        InetAddress discoveredAddr = src;
+        if (p.length >= 3 && !p[2].trim().isEmpty()) {
+            try {
+                discoveredAddr = InetAddress.getByName(p[2].trim());
+            } catch (Exception ignored) {
+            }
+        }
+
+        boolean changed = peers.addOrUpdate(nick, discoveredAddr, discoveredPort, parseBirth(p));
         if (changed) {
             log("HELLO de '" + nick + "' (" + src.getHostAddress() + ":" + srcPort
                     + "). Nova topologia: " + peers.diagram());
@@ -241,14 +288,19 @@ public class RingNode {
         }
 
         log("[TOKEN] recebido. " + (queue.isEmpty() ? "Fila vazia." : "Há mensagens na fila."));
-        inTokenSleep = true;
-        sleepSeconds(cfg.tokenTime); // segura o token ("tempo do token") para visualização
-        inTokenSleep = false;
 
+        // Processa o token imediatamente, sem bloquear a receiver thread.
+        // O sleep de visualização acontece após o repasse/envio, não antes.
         OutgoingMessage m = queue.peek();
         if (m != null) {
+            inTokenSleep = true;
+            sleepSeconds(cfg.tokenTime);
+            inTokenSleep = false;
             sendData(m); // detém o token até os dados retornarem à origem
         } else {
+            inTokenSleep = true;
+            sleepSeconds(cfg.tokenTime);
+            inTokenSleep = false;
             forwardToken();
         }
     }
@@ -506,14 +558,23 @@ public class RingNode {
     }
 
     /**
-     * Mecanismo de reserva: tenta gerar o primeiro token periodicamente até
-     * conseguir (mestre + ao menos 2 máquinas no anel) ou até outra máquina
-     * assumir esse papel. Normalmente a geração já acontece antes disso, de
-     * forma reativa, em tryStartFirstToken() chamado a partir de
-     * onDiscover/onHello.
+     * Mecanismo de reserva: reenvia DISCOVER periodicamente até descobrir outros
+     * nós, depois tenta gerar o primeiro token. Assim, mesmo que o DISCOVER
+     * inicial seja perdido (UDP não garante entrega), o nó continua tentando
+     * se conectar aos demais e ao anel.
      */
     private void bootstrapToken() {
         sleepMillis(1000);
+        int discoveryAttempts = 0;
+        while (running && peers.size() <= 1) {
+            // Rediscover periodicamente enquanto sozinho
+            if (++discoveryAttempts % 5 == 0) {
+                log("[BOOTSTRAP] rediscovery (tentativa " + discoveryAttempts + ")");
+                sendDiscover();
+            }
+            sleepMillis(1000);
+        }
+        // Agora temos pelo menos mais 1 nó, tenta gerar token se foor mestre
         while (running && !firstTokenDone) {
             tryStartFirstToken("verificação periódica de inicialização");
             sleepMillis(1000);
@@ -561,7 +622,8 @@ public class RingNode {
     }
 
     private void log(String s) {
-        Console.println("[" + selfNick + "] " + s);
+        String now = (LocalDateTime.now().format(DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm:ss.SSS")));
+        Console.println(now + " [" + selfNick + "] " + s);
     }
 
     private void sleepSeconds(double s) { sleepMillis((long) (s * 1000)); }
