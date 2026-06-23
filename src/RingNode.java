@@ -9,6 +9,8 @@ import java.nio.charset.StandardCharsets;
 import java.util.Collections;
 import java.util.List;
 import java.util.Random;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 
 /**
  * Núcleo da aplicação: implementa o nó (máquina) do anel.
@@ -637,7 +639,8 @@ public class RingNode {
     }
 
     private void log(String s) {
-        Console.println("[" + selfNick + "] " + s);
+        String now = (LocalDateTime.now().format(DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm:ss.SSS")));
+        Console.println(now + " [" + selfNick + "] " + s);
     }
 
     private void sleepSeconds(double s) { sleepMillis((long) (s * 1000)); }
