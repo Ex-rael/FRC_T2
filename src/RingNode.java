@@ -4,14 +4,11 @@ import java.net.Inet4Address;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.NetworkInterface;
+import java.net.SocketTimeoutException;
 import java.nio.charset.StandardCharsets;
-import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
 import java.util.Collections;
 import java.util.List;
 import java.util.Random;
-import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
 
 /**
  * Núcleo da aplicação: implementa o nó (máquina) do anel.
@@ -71,6 +68,7 @@ public class RingNode {
         this.socket = new DatagramSocket(null);
         this.socket.setReuseAddress(true);
         this.socket.setBroadcast(true);
+        this.socket.setSoTimeout(1000); // timeout de 1 segundo para não ficar bloqueado
         this.socket.bind(new InetSocketAddress(bindPort));
 
         this.peers = new PeerRegistry(selfNick, InetAddress.getByName(selfIp), bindPort, selfBirthTime);
@@ -106,7 +104,10 @@ public class RingNode {
     private void broadcast(String msg) {
         if (discoveryTargets.isEmpty()) {
             log("[BROADCAST] nenhum target de descoberta configurado!");
+            return;
         }
+        String type = Packet.typeOf(msg);
+        log("[TX] " + type + " para " + discoveryTargets.size() + " targets");
         for (InetSocketAddress t : discoveryTargets) {
             sendRaw(t.getAddress(), t.getPort(), msg);
         }
@@ -115,18 +116,32 @@ public class RingNode {
     // ===== RECEPÇÃO =====
 
     private void receiveLoop() {
+        log("[RECEIVER] iniciada, escutando em porta " + bindPort);
+        try {
+            log("[RECEIVER] socket timeout: " + socket.getSoTimeout() + "ms");
+        } catch (Exception e) {
+            log("[RECEIVER] erro ao verificar timeout: " + e.getMessage());
+        }
         byte[] buf = new byte[65535];
+        int pktCount = 0;
         while (running) {
             try {
                 DatagramPacket pkt = new DatagramPacket(buf, buf.length);
                 socket.receive(pkt);
+                pktCount++;
                 String raw = new String(pkt.getData(), 0, pkt.getLength(), StandardCharsets.UTF_8);
                 // Remove apenas quebras de linha ao final (artefato de transporte),
                 // preservando o conteúdo da mensagem para o cálculo do CRC.
                 while (raw.endsWith("\n") || raw.endsWith("\r")) {
                     raw = raw.substring(0, raw.length() - 1);
                 }
+                String type = Packet.typeOf(raw);
+                if (type.equals(Packet.DISCOVER) || type.equals(Packet.HELLO) || type.equals(Packet.TOKEN)) {
+                    log("[RX] " + type + " de " + pkt.getAddress().getHostAddress() + ":" + pkt.getPort());
+                }
                 handle(raw, pkt.getAddress(), pkt.getPort());
+            } catch (SocketTimeoutException e) {
+                // Timeout esperado, apenas continua
             } catch (Exception e) {
                 if (running) log("Erro na recepção: " + e.getMessage());
             }
@@ -622,8 +637,7 @@ public class RingNode {
     }
 
     private void log(String s) {
-        String now = (LocalDateTime.now().format(DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm:ss.SSS")));
-        Console.println(now + " [" + selfNick + "] " + s);
+        Console.println("[" + selfNick + "] " + s);
     }
 
     private void sleepSeconds(double s) { sleepMillis((long) (s * 1000)); }
